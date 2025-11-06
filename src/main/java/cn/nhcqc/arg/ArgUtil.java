@@ -12,7 +12,19 @@ import java.util.stream.Collectors;
  * @author 陈庆灿
  */
 public class ArgUtil {
-    public static final int KB = 1024, BUFSIZ = 8 * KB;
+    public static final int KB = 1024, BUFSIZ = 4 * KB;
+
+    /** 如主项目有引用依赖项 org.slf4j:slf4j-api 令 org.slf4j.Logger 类存在，LOG 为该类对象，否则为空指针。 */
+    public static final Object LOG;
+    static {
+        Object a = null;
+        try {
+            a = Class.forName ("org.slf4j.LoggerFactory")
+                     .getMethod ("getLogger", Class.class)
+                     .invoke (null, ArgUtil.class);
+        } catch (Exception ignore) {/* ignore */}
+        LOG = a;
+    }
 
     //------------------------------------------------------------------------
     /**
@@ -130,6 +142,12 @@ public class ArgUtil {
     }
 
     //------------------------------------------------------------------------
+    /** 如入参为空指针则返回空字串，否则原样返回。 */
+    public static String strNullToEmpty (String s) {
+        return s != null ? s : "";
+    }
+
+    //------------------------------------------------------------------------
     /**
      * 用第一个找到的分隔符，切割原字串，返回切割后的两个字串。如找不到分隔符，返回空集。
      * @param str 原字串
@@ -138,6 +156,7 @@ public class ArgUtil {
      */
     public static List<String> split2 (final String str, final Character sep) {
         var list = new ArrayList<String> (2);
+        if (str == null) return list;
         int i = str.indexOf (sep);
         if (i < 0) return list;
         list.add (str.substring (0, i));
@@ -153,6 +172,7 @@ public class ArgUtil {
      */
     public static List<String> split2last (final String str, final Character sep) {
         var list = new ArrayList<String> (2);
+        if (str == null) return list;
         int i = str.lastIndexOf (sep);
         if (i < 0) return list;
         list.add (str.substring (0, i));
@@ -161,10 +181,55 @@ public class ArgUtil {
     }
 
     //------------------------------------------------------------------------
+    /** 如主项目有引用依赖项 cn.nhcqc.tabfile:tabfile-parser 按空白字符分解文本行成列，返回指定列内容。如输入为空或列号超限，返回空字串 "". */
+    public static String getLineCol (final String line, final int col) {
+        if (line == null || line.isBlank()) return "";
+
+        try {
+            var tab = (cn.nhcqc.tabfile.TabFileParser)
+                Class.forName ("cn.nhcqc.tabfile.TabFileParser")
+                     .getConstructor ()
+                     .newInstance ();
+            return strNullToEmpty (
+                tab
+                .parse (line)
+                .stream ()
+                .findFirst ()
+                .get ()
+                .get (col)
+            );
+
+        } catch (Exception e) {
+            if (LOG != null && LOG instanceof org.slf4j.Logger slf4j) {
+                slf4j.warn ("按列分解文本行出错: " + line, e);
+            }
+            return "";
+        }
+    }
+
+    //------------------------------------------------------------------------
     /** Sleep ignores InterruptedException. */
     public static void sleepEx (final Duration duration) {
         try { Thread.sleep (duration.toMillis ()); }
         catch (InterruptedException e) {/* ignore */}
+    }
+
+    //------------------------------------------------------------------------
+    /** 写错误级日志（如主项目有引用依赖项 org.slf4j:slf4j-api）、写输出流后，结束进程。 */
+    public static void die (final String message, final Exception e, final PrintStream out) {
+        if (LOG != null && LOG instanceof org.slf4j.Logger slf4j) {
+            slf4j.error (message, e);
+        }
+        if (out != null) {
+            out.println (message);
+        }
+        e.printStackTrace ();
+        System.exit (1);
+    }
+
+    /** 写错误级日志（如主项目有引用依赖项 org.slf4j:slf4j-api）、写标准错误输出后，结束进程。 */
+    public static void die (final String message, final Exception e) {
+        die (message, e, System.err);
     }
 
     //------------------------------------------------------------------------
@@ -176,6 +241,37 @@ public class ArgUtil {
             .filter (k -> ! lookup.contains (k))
             .collect(Collectors.toSet ());
         rm.forEach  (k -> map.remove (k));
+    }
+
+    //------------------------------------------------------------------------
+    /**
+     * 如主项目有引用依赖项 org.yaml:snakeyaml 打开 YAML 文件并返回指定节点。
+     * 逐级节点名逐个参数值提供。
+     * 如无指定节点则返回 null.
+     */
+    public static Map<?, ?> yamlGetNode (final Path file, final String... node)
+    throws IOException {
+        if (file == null || node == null || node.length <= 0) return null;
+        Object aYaml;
+        try {
+            aYaml = Class.forName ("org.yaml.snakeyaml.Yaml").getConstructor ().newInstance ();
+        } catch (Exception e) {
+            return null;
+        }
+        var yaml = (org.yaml.snakeyaml.Yaml) aYaml;
+
+        try(var in = Files.newInputStream (file)) {
+            var root = yaml.load (in);
+            if (root instanceof Map<?, ?> mapRoot) {
+                Map<?, ?> mapEnd = mapRoot;
+                for(var node1 : node) {
+                    if (mapEnd.get (node1) instanceof Map<?, ?> mapNext) mapEnd = mapNext;
+                    else return null;
+                }
+                return mapEnd;
+            }
+        }
+        return null;
     }
 
     //------------------------------------------------------------------------
@@ -268,6 +364,13 @@ public class ArgUtil {
     }
 
     //------------------------------------------------------------------------
+    /** 关闭且忽略异常 */
+    public static void closeIgEx (final AutoCloseable c) {
+        try { c.close (); }
+        catch (Exception e) { /* ignore */ }
+    }
+
+    //------------------------------------------------------------------------
     /** 把输入流全部读了然后关闭 */
     public static byte[] closeReadAll (final InputStream in)
     throws IOException {
@@ -295,6 +398,7 @@ public class ArgUtil {
         return s.toString ();
     }
 
+    //------------------------------------------------------------------------
     /** 读文件一部分，如偏移量超出范围返回空数组。 */
     public static byte[] readNBytes (final File f, final long pos, final int len)
     throws IOException {
@@ -351,7 +455,7 @@ public class ArgUtil {
     public static OutputStream bsprintf_ne
     (final OutputStream out, final Charset cs, final String f, final Object... args) {
         try { bsprintf (out, cs, f, args); }
-        catch (IOException e) { /* ignore */}
+        catch (IOException e) {/* ignore */}
         return out;
     }
 
@@ -359,11 +463,12 @@ public class ArgUtil {
     public static record ExecBytes  (int exitcode, byte[] output) {}
     public static record ExecString (int exitcode, String output) {}
 
-    /** 运行外部程序，等结束，取进程返回码和输出内容，含错误输出。 */
-    public static ExecBytes exec_b (final String... cmd)
+    /** 在指定路径运行外部程序，等结束，取进程返回码和输出字节串，含错误输出。 */
+    public static ExecBytes exec_b (final File cwd, final String... cmd)
     throws IOException, InterruptedException {
         var output = new ByteArrayOutputStream ();
         Process proc = new ProcessBuilder (cmd)
+            .directory (cwd)
             .redirectErrorStream (true)
             .start ();
         // 不等到 proc.waitFor () 之后再读以避免缓冲区满堵塞进程不结束
@@ -375,14 +480,34 @@ public class ArgUtil {
         return new ExecBytes (proc.waitFor (), output.toByteArray ());
     }
 
-    /** 运行外部程序，等结束，取进程返回码和输出内容，含错误输出。 */
+    /** 在当前路径运行外部程序，等结束，取进程返回码和输出字节串，含错误输出。 */
+    public static ExecBytes exec_b (final String... cmd)
+    throws IOException, InterruptedException {
+        return exec_b (null, cmd);
+    }
+
+    /** 在指定路径运行外部程序，等结束，取进程返回码和输出字符串，含错误输出。 */
+    public static ExecString exec_s (final File cwd, final Charset cs, final String... cmd)
+    throws IOException, InterruptedException {
+        var exec = exec_b (cwd, cmd);
+        return new ExecString (exec.exitcode, new String (exec.output, cs));
+    }
+
+    /** 在当前路径运行外部程序，等结束，取进程返回码和输出字符串，含错误输出。 */
     public static ExecString exec_s (final Charset cs, final String... cmd)
     throws IOException, InterruptedException {
         var exec = exec_b (cmd);
         return new ExecString (exec.exitcode, new String (exec.output, cs));
     }
 
-    /** 运行外部程序，等结束，取进程返回码和输出内容，含错误输出。 */
+    /** 在指定路径运行外部程序，等结束，取进程返回码和输出字符串（操作系统当前字符集），含错误输出。 */
+    public static ExecString exec_s (final File cwd, final String... cmd)
+    throws IOException, InterruptedException {
+        var cs = Charset.forName (System.getProperty ("native.encoding"));
+        return exec_s (cwd, cs, cmd);
+    }
+
+    /** 在当前路径运行外部程序，等结束，取进程返回码和输出字符串（操作系统当前字符集），含错误输出。 */
     public static ExecString exec_s (final String... cmd)
     throws IOException, InterruptedException {
         var cs = Charset.forName (System.getProperty ("native.encoding"));
@@ -399,6 +524,35 @@ public class ArgUtil {
             }
         }
         return null;
+    }
+
+    /**
+     * 在 Linux 约定的几个程序路径找文件，如果都找不到则返回空指针。
+     * <ul>
+     *     <li> /bin/
+     *     <li> /usr/bin/
+     *     <li> /sbin/
+     *     <li> /usr/sbin/
+     * </ul>
+     */
+    public static String findLinuxExe (final String exe) {
+        String[] tofind = new String[] { "/bin/" + exe, "/usr/bin/" + exe, "/sbin/" + exe, "/usr/sbin/" + exe };
+        return existsWhichFile (tofind);
+    }
+
+    /** 在 Linux 约定的几个程序路径找 bash，返回全路径例如 /bin/bash，如果都找不到则返回空指针。 */
+    public static String findBash () {
+        return findLinuxExe ("bash");
+    }
+
+    private static String bash = null;
+
+    /** 在当前路径通过 bash -c 执行 shell 命令，等结束，取进程返回码和输出字符串（操作系统当前字符集），含错误输出。 */
+    public static String bash_c (final String shell)
+    throws IOException, InterruptedException {
+        if (bash == null) bash = findBash ();
+        if (bash == null) throw new IOException ("bash not found");
+        return exec_s (new String[] { bash, "-c", shell }).output;
     }
 
 }

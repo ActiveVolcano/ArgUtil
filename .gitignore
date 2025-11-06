@@ -12,3 +12,6 @@ hs_err_pid*
 .classpath
 .settings
 target/
+
+# Visual Studio Code project files
+.vscode
