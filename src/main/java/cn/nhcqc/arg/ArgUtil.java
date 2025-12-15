@@ -1,19 +1,26 @@
 package cn.nhcqc.arg;
 
 import java.io.*;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.Charset;
 import java.nio.file.*;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * 参数相关例程库
  * @author 陈庆灿
  */
 public class ArgUtil {
-    public static final int KB = 1024, BUFSIZ = 4 * KB;
+    public static final int BYTES_INT = 4, KB = 1024, BUFSIZ = 4 * KB;
 
+    //------------------------------------------------------------------------
     /** 如主项目有引用依赖项 org.slf4j:slf4j-api 令 org.slf4j.Logger 类存在，LOG 为该类对象，否则为空指针。 */
     public static final Object LOG;
     static {
@@ -126,9 +133,37 @@ public class ArgUtil {
     }
 
     //------------------------------------------------------------------------
+    /** 读入 .properties 文件，相当于无 [] 分节的 .ini 文件。 */
+    public static Properties loadProperties (final Path path)
+    throws IOException {
+        Properties prop = new Properties ();
+        try (InputStream fin = Files.newInputStream (path)) {
+            prop.load (fin);
+        }
+        return prop;
+    }
+
+    //------------------------------------------------------------------------
+    /** 先试读 Java 环境变量，再试读操作系统环境变量，都找不到则返回缺省值。 */
+    public static String getEnv2 (final String name, final String default_) {
+        String value = System.getProperty (name);
+        if (value != null) return value;
+        value = System.getenv (name);
+        return value != null ? value : default_;
+    }
+
+    //------------------------------------------------------------------------
+    /** 先试读 Java 环境变量，再试读操作系统环境变量，再试读 Properties 参数，都找不到则返回缺省值。 */
+    public static String getEnvProperty (final Properties prop, final String name, final String default_) {
+        String value = getEnv2 (name, null);
+        if (value != null) return value;
+        return prop.getProperty (name, default_);
+    }
+
+    //------------------------------------------------------------------------
     /** parse URL query string */
     public static Map <String, String> parseQueryString (final String query) {
-        var r = new HashMap <String, String> ();
+        Map <String, String> r = new HashMap <String, String> ();
         if (query == null) return r;
 
         String[] split_and = query.split ("&");
@@ -155,7 +190,7 @@ public class ArgUtil {
      * @return 切割后的两个字串。如找不到分隔符，返回空集。
      */
     public static List<String> split2 (final String str, final Character sep) {
-        var list = new ArrayList<String> (2);
+        List<String> list = new ArrayList<String> (2);
         if (str == null) return list;
         int i = str.indexOf (sep);
         if (i < 0) return list;
@@ -171,7 +206,7 @@ public class ArgUtil {
      * @return 切割后的两个字串。如找不到分隔符，返回空集。
      */
     public static List<String> split2last (final String str, final Character sep) {
-        var list = new ArrayList<String> (2);
+        List<String> list = new ArrayList<String> (2);
         if (str == null) return list;
         int i = str.lastIndexOf (sep);
         if (i < 0) return list;
@@ -183,10 +218,10 @@ public class ArgUtil {
     //------------------------------------------------------------------------
     /** 如主项目有引用依赖项 cn.nhcqc.tabfile:tabfile-parser 按空白字符分解文本行成列，返回指定列内容。如输入为空或列号超限，返回空字串 "". */
     public static String getLineCol (final String line, final int col) {
-        if (line == null || line.isBlank()) return "";
+        if (line == null || line.trim().isEmpty()) return "";
 
         try {
-            var tab = (cn.nhcqc.tabfile.TabFileParser)
+            cn.nhcqc.tabfile.TabFileParser tab = (cn.nhcqc.tabfile.TabFileParser)
                 Class.forName ("cn.nhcqc.tabfile.TabFileParser")
                      .getConstructor ()
                      .newInstance ();
@@ -200,25 +235,30 @@ public class ArgUtil {
             );
 
         } catch (Exception e) {
-            if (LOG != null && LOG instanceof org.slf4j.Logger slf4j) {
-                slf4j.warn ("按列分解文本行出错: " + line, e);
+            if (LOG != null && LOG instanceof org.slf4j.Logger) {
+                ((org.slf4j.Logger) LOG).warn ("按列分解文本行出错: " + line, e);
             }
             return "";
         }
     }
 
     //------------------------------------------------------------------------
-    /** Sleep ignores InterruptedException. */
-    public static void sleepEx (final Duration duration) {
+    /** 暂停且忽略异常。和 sleepIgEx 等效，只是命名风格不同。 */
+    public static void sleepex (final Duration duration) {
         try { Thread.sleep (duration.toMillis ()); }
         catch (InterruptedException e) {/* ignore */}
+    }
+
+    /** 暂停且忽略异常。和 sleepex 等效，只是命名风格不同。 */
+    public static void sleepIgEx (final Duration duration) {
+        sleepex (duration);
     }
 
     //------------------------------------------------------------------------
     /** 写错误级日志（如主项目有引用依赖项 org.slf4j:slf4j-api）、写输出流后，结束进程。 */
     public static void die (final String message, final Exception e, final PrintStream out) {
-        if (LOG != null && LOG instanceof org.slf4j.Logger slf4j) {
-            slf4j.error (message, e);
+        if (LOG != null && LOG instanceof org.slf4j.Logger) {
+            ((org.slf4j.Logger) LOG).error (message, e);
         }
         if (out != null) {
             out.println (message);
@@ -233,9 +273,7 @@ public class ArgUtil {
     }
 
     //------------------------------------------------------------------------
-    /**
-     * 移除 map 里面在 lookup 找不到对应 key 的元素
-     */
+    /** 移除 map 里面在 lookup 找不到对应 key 的元素 */
     public static <K,V> void removeIfNotIn (final Map<K,V> map, final Collection<K> lookup) {
         Set<K> rm = map.keySet().stream()
             .filter (k -> ! lookup.contains (k))
@@ -244,12 +282,58 @@ public class ArgUtil {
     }
 
     //------------------------------------------------------------------------
+    /** one 通过 equals 方法比较 any 中的每一个元素，如有匹配返回 true 如无匹配返回 false，如 one 或 any 为空指针则返回 false. */
+    public static boolean equalsAny (final Object one, final Object... any) {
+        if (one == null || any == null) return false;
+        for (Object any1 : any) if (one.equals (any1)) return true;
+        return false;
+    }
+
+    //------------------------------------------------------------------------
+    /**
+     * YAML 取指定节点值，如无指定节点返回空字串，不会返回空指针。
+     * @param root 根节点由 new Yaml().load() 得到
+     * @param path 节点路径以 / 分隔
+     */
+    public static String getYaml (final Map <String, Object> root, final String path) {
+        if (root == null || path == null) return "";
+
+        Map <String, Object> value1 = root;
+        for (String path1 : path.split ("/")) {
+            if (path1.trim().isEmpty()) continue;
+            if (value1 == null) return "";
+            Object node1 = value1.get (path1);
+            if (node1 == null) return "";
+            if (node1 instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map <String, Object> node1m = (Map <String, Object>) node1;
+                value1 = node1m;
+            } else {
+                return node1.toString();
+            }
+        }
+
+        return value1 == null ? "" : value1.toString();
+    }
+
+    //------------------------------------------------------------------------
+    /**
+     * YAML 取指定节点值，如无指定节点返回指定缺省值。
+     * @param root 根节点由 new Yaml().load() 得到
+     * @param path 节点路径以 / 分隔
+     */
+    public static String getYaml (final Map <String, Object> root, final String path, final String default_) {
+        String value = getYaml (root, path);
+        return value.isEmpty () ? default_ : value;
+    }
+
+    //------------------------------------------------------------------------
     /**
      * 如主项目有引用依赖项 org.yaml:snakeyaml 打开 YAML 文件并返回指定节点。
      * 逐级节点名逐个参数值提供。
      * 如无指定节点则返回 null.
      */
-    public static Map<?, ?> yamlGetNode (final Path file, final String... node)
+    public static Map<?, ?> getYaml (final Path file, final String... node)
     throws IOException {
         if (file == null || node == null || node.length <= 0) return null;
         Object aYaml;
@@ -258,14 +342,15 @@ public class ArgUtil {
         } catch (Exception e) {
             return null;
         }
-        var yaml = (org.yaml.snakeyaml.Yaml) aYaml;
+        org.yaml.snakeyaml.Yaml yaml = (org.yaml.snakeyaml.Yaml) aYaml;
 
-        try(var in = Files.newInputStream (file)) {
-            var root = yaml.load (in);
-            if (root instanceof Map<?, ?> mapRoot) {
+        try(InputStream in = Files.newInputStream (file)) {
+            Map<?, ?> root = yaml.load (in);
+            if (root instanceof Map<?, ?>) {
+                Map<?, ?> mapRoot = (Map<?, ?>) root;
                 Map<?, ?> mapEnd = mapRoot;
-                for(var node1 : node) {
-                    if (mapEnd.get (node1) instanceof Map<?, ?> mapNext) mapEnd = mapNext;
+                for(String node1 : node) {
+                    if (mapEnd.get (node1) instanceof Map<?, ?>) mapEnd = (Map<?, ?>) mapEnd.get (node1);
                     else return null;
                 }
                 return mapEnd;
@@ -275,20 +360,133 @@ public class ArgUtil {
     }
 
     //------------------------------------------------------------------------
+    /** 基于纳秒时间戳生成数据库表 ID 字段值 */
+    public static long newDBID () {
+        return System.currentTimeMillis () * 1_000_000L + LocalDateTime.now().getNano() % 1_000_000L;
+    }
+
+    //------------------------------------------------------------------------
+    /** 逐个将数组的元素设为数据库指令的参数 */
+    public static PreparedStatement sqlSetArgs (final PreparedStatement sql, final Object... args)
+    throws SQLException {
+        if (sql == null || args == null) return sql;
+        for (int i = 1 ; i <= args.length ; i++) {
+            sql.setObject (i, args[i - 1]);
+        }
+        return sql;
+    }
+
+    /** 数据库执行无结果指令 */
+    public static int sqlUpdate (final PreparedStatement sql, final Object... args)
+    throws SQLException {
+        Objects.requireNonNull (sql);
+        sqlSetArgs (sql, args);
+        return sql.executeUpdate ();
+    }
+
+    /**
+     * 查询数据库结果是一个整数.
+     * @return 如查无结果返回缺省值
+     */
+    public static int sqlQueryInt (final int default_, final PreparedStatement sql, final Object... args)
+    throws SQLException {
+        Objects.requireNonNull (sql);
+        sqlSetArgs (sql, args);
+        try (java.sql.ResultSet r = sql.executeQuery ()) {
+            return r.next () ? r.getInt (1) : default_;
+        }
+    }
+
+    /**
+     * 查询数据库结果是一个长整数.
+     * @return 如查无结果返回缺省值
+     */
+    public static long sqlQueryLong (final long default_, final PreparedStatement sql, final Object... args)
+    throws SQLException {
+        Objects.requireNonNull (sql);
+        sqlSetArgs (sql, args);
+        try (java.sql.ResultSet r = sql.executeQuery ()) {
+            return r.next () ? r.getLong (1) : default_;
+        }
+    }
+
+    /**
+     * 查询数据库结果是一个字符串.
+     * @return 如查无结果返回缺省值
+     */
+    public static String sqlQueryString (final String default_, final PreparedStatement sql, final Object... args)
+    throws SQLException {
+        Objects.requireNonNull (sql);
+        sqlSetArgs (sql, args);
+        try (java.sql.ResultSet r = sql.executeQuery ()) {
+            return r.next () ? r.getString (1) : default_;
+        }
+    }
+
+    //------------------------------------------------------------------------
+    /** 0x%X */
+    public static String hex (final int i) {
+        return String.format ("0x%X", i);
+    }
+
+    /** 0x%08X */
+    public static String hex0 (final int i) {
+        return String.format ("0x%08X", i);
+    }
+
+    /** 0x%X */
+    public static String hex (final long l) {
+        return String.format ("0x%X", l);
+    }
+
+    /** 0x%016X */
+    public static String hex0 (final long l) {
+        return String.format ("0x%016X", l);
+    }
+
+    //------------------------------------------------------------------------
     private static final HexFormat BASE16 = HexFormat.of ().withUpperCase ();
 
     /** 字节数组转成 Base16 (Hex) 字符串 */
     public static String base16 (final byte[] b) {
-        return BASE16.formatHex (b);
+        return b == null ? "null" : BASE16.formatHex (b);
     }
     /** 字节数组转成 Base16 (Hex) 字符串 */
     public static String base16 (final byte[] b, final int len) {
-        return BASE16.formatHex (b, 0, len);
+        if (len <= 0) return "";
+        return b == null ? "null" : BASE16.formatHex (b, 0, Math.min (len, b.length));
     }
 
     /** Base16 (Hex) 字符串转成字节数组 */
     public static byte[] unbase16 (final String s) {
-        return BASE16.parseHex (s);
+        return s == null || s.isEmpty () ? new byte[0] : BASE16.parseHex (s);
+    }
+
+    /** 输出字节数组长度及前面部分字节作为预览，如入参为空指针则返回 "(null)". */
+    public static String head16 (final byte[] b, final int len) {
+        if (b == null) return "(null)";
+        if (len <= 0) return "";
+
+        StringBuilder s = new StringBuilder();
+        s.append ("(").append (b.length).append (") ");
+        BASE16.formatHex(s, b, 0, Math.min (len, b.length));
+        return s.toString();
+    }
+
+    /** 输出字节数组长度及前面16字节作为预览，如入参为空指针则返回 "(null)". */
+    public static String head16 (final byte[] b) {
+        return head16 (b, 16);
+    }
+
+    /** 输出字符串长度及前面部分字符作为预览，如入参为空指针则返回 "(null)". */
+    public static String headchar (final String s, final int len) {
+        if (s == null) return "(null)";
+        return noMoreThan (s, len);
+    }
+
+    /** 输出字符串长度及前面16字符作为预览，如入参为空指针则返回 "(null)". */
+    public static String headchar (final String s) {
+        return headchar (s, 16);
     }
 
     //------------------------------------------------------------------------
@@ -301,31 +499,34 @@ public class ArgUtil {
 
     /** 字节数组转成 Base64 字符串 */
     public static String base64 (final byte[] b) {
-        return BASE64ENC.encodeToString (b);
+        return b == null ? "null" : BASE64ENC.encodeToString (b);
     }
     /** 字节数组转成 URL 安全的 Base64 字符串 */
     public static String base64url (final byte[] b) {
-        return BASE64URLENC.encodeToString (b);
+        return b == null ? "null" : BASE64URLENC.encodeToString (b);
     }
     /** 字节数组转成 MIME 样式 Base64 字符串 */
     public static String base64mime (final byte[] b) {
-        return BASE64MIMEENC.encodeToString (b);
+        return b == null ? "null" : BASE64MIMEENC.encodeToString (b);
     }
 
     /** 字节数组转成 Base64 字符串 */
     public static String base64 (final byte[] b, final int len) {
+        if (b == null || len <= 0) return "";
         return len == b.length ?
             BASE64ENC.encodeToString (b) :
             BASE64ENC.encodeToString (Arrays.copyOf (b, len)) ;
     }
     /** 字节数组转成 URL 安全的 Base64 字符串 */
     public static String base64url (final byte[] b, final int len) {
+        if (b == null || len <= 0) return "";
         return len == b.length ?
             BASE64URLENC.encodeToString (b) :
             BASE64URLENC.encodeToString (Arrays.copyOf (b, len)) ;
     }
     /** 字节数组转成 MIME 样式 Base64 字符串 */
     public static String base64mime (final byte[] b, final int len) {
+        if (b == null || len <= 0) return "";
         return len == b.length ?
             BASE64MIMEENC.encodeToString (b) :
             BASE64MIMEENC.encodeToString (Arrays.copyOf (b, len)) ;
@@ -360,7 +561,59 @@ public class ArgUtil {
 
     /** URL 形式 Base64 编码成字符串，无填充等号，以便用于表单值。 */
     public static String formBase64 (final byte[] b) {
-        return BASE64URLENC.withoutPadding ().encodeToString (b);
+        return b == null ? "null" : BASE64URLENC.withoutPadding ().encodeToString (b);
+    }
+
+    //------------------------------------------------------------------------
+    /** 拼接多个字节数组 */
+    public static byte[] concat (final byte[] a, final byte[]... b) {
+        if (b == null || b.length <= 0) return a;
+        int len = a.length +
+                  Stream.of (b).mapToInt (b1 -> b1.length).sum ();
+        byte[] c = Arrays.copyOf (a, len);
+
+        int pos = a.length;
+        for (byte[] b1 : b) {
+            System.arraycopy (b1, 0, c, pos, b1.length);
+            pos += b1.length;
+        }
+
+        return c;
+    }
+
+    //------------------------------------------------------------------------
+    /** 将整数按本机字节序转成字节数组 */
+    public static byte[] toBytes (final int i) {
+        byte[] b = new byte [BYTES_INT];
+        ByteBuffer.wrap (b).order (ByteOrder.nativeOrder ()).putInt (i);
+        return b;
+    }
+
+    //------------------------------------------------------------------------
+    /** 将4个字节以本机字节序转为整数，入参如为空指针或长度不足4字节则返回0. */
+    public static int toInt (final byte[] b) {
+        if (b == null || b.length < BYTES_INT) return 0;
+        return ByteBuffer.wrap (b).order (ByteOrder.nativeOrder ()).getInt ();
+    }
+
+    /** 从指定偏移开始截取4字节以本机字节序转为，入参如为空指针或长度不足4字节则返回0. */
+    public static int toInt (final byte[] b, final int offset) {
+        if (b == null || b.length < BYTES_INT) return 0;
+        return ByteBuffer.wrap (b, offset, BYTES_INT)
+            .order (ByteOrder.nativeOrder())
+            .getInt ();
+    }
+
+    /** 将一个字节按无符号规则转为整数 */
+    public static int toUInt (final byte b) {
+        byte[] bi = new byte [] { b, 0, 0, 0 };
+        return ByteBuffer.wrap (bi).order (ByteOrder.LITTLE_ENDIAN).getInt ();
+    }
+
+    //------------------------------------------------------------------------
+    /** 返回字节数组长度，如为空指针则返回 "null". */
+    public static String strLength (final byte[] b) {
+        return b == null ? "null" : Integer.toString (b.length);
     }
 
     //------------------------------------------------------------------------
@@ -374,8 +627,16 @@ public class ArgUtil {
     /** 把输入流全部读了然后关闭 */
     public static byte[] closeReadAll (final InputStream in)
     throws IOException {
-        try { return in.readAllBytes (); }
-        finally { in.close (); }
+        try { // return in.readAllBytes ();
+            java.lang.reflect.Method readAllBytesMethod = InputStream.class.getMethod("readAllBytes");
+            return (byte[]) readAllBytesMethod.invoke (in);
+        } catch (NoSuchMethodException e) {
+            throw new IOException ("当前 Java 版本不支持 InputStream.readAllBytes()", e);
+        } catch (Exception e) {
+            throw new IOException (e);
+        } finally {
+            in.close ();
+        }
     }
 
     /** 把输入流全部读了然后关闭 */
@@ -388,8 +649,8 @@ public class ArgUtil {
     /** 把输入流全部读了然后关闭，多行内容拼接成一长行。 */
     public static String closeReadAllConcat (final InputStream in, final Charset cs)
     throws IOException {
-        var s = new StringBuilder ();
-        try(var reader =
+        StringBuilder s = new StringBuilder ();
+        try(BufferedReader reader =
             new BufferedReader (
             new InputStreamReader (
             in, cs))) {
@@ -402,7 +663,7 @@ public class ArgUtil {
     /** 读文件一部分，如偏移量超出范围返回空数组。 */
     public static byte[] readNBytes (final File f, final long pos, final int len)
     throws IOException {
-        try (var in = new RandomAccessFile (f, "r")) {
+        try (RandomAccessFile in = new RandomAccessFile (f, "r")) {
             byte[] buf = new byte [len];
             in.seek (pos);
             int read = in.read (buf);
@@ -421,10 +682,20 @@ public class ArgUtil {
     }
 
     //------------------------------------------------------------------------
+    /** 如字符串现有长度不超出指定值则原样返回，否则返回截短后副本。如传入空指针或负数，则返回空字符串。 */
+    public static String noMoreThan (final String s, final int len) {
+        if (s != null && len > 0) {
+            return s.length() <= len ? s : s.substring (0, len);
+        } else {
+            return "";
+        }
+    }
+
+    //------------------------------------------------------------------------
     /** 在文件指定偏移量处，写入整个字节数组。 */
     public static void write (final File f, final byte[] write, final long pos)
     throws IOException {
-        try (var out = new RandomAccessFile (f, "rw")) {
+        try (RandomAccessFile out = new RandomAccessFile (f, "rw")) {
             out.seek (pos);
             out.write (write);
         }
@@ -460,13 +731,30 @@ public class ArgUtil {
     }
 
     //------------------------------------------------------------------------
-    public static record ExecBytes  (int exitcode, byte[] output) {}
-    public static record ExecString (int exitcode, String output) {}
+    public static class ExecBytes {
+        public final int exitcode;
+        public final byte[] output;
+
+        public ExecBytes (final int exitcode, final byte[] output) {
+            this.exitcode = exitcode;
+            this.output = output;
+        }
+    }
+
+    public static class ExecString {
+        public final int exitcode;
+        public final String output;
+
+        public ExecString (final int exitcode, final String output) {
+            this.exitcode = exitcode;
+            this.output = output;
+        }
+    }
 
     /** 在指定路径运行外部程序，等结束，取进程返回码和输出字节串，含错误输出。 */
     public static ExecBytes exec_b (final File cwd, final String... cmd)
     throws IOException, InterruptedException {
-        var output = new ByteArrayOutputStream ();
+        ByteArrayOutputStream output = new ByteArrayOutputStream ();
         Process proc = new ProcessBuilder (cmd)
             .directory (cwd)
             .redirectErrorStream (true)
@@ -489,28 +777,28 @@ public class ArgUtil {
     /** 在指定路径运行外部程序，等结束，取进程返回码和输出字符串，含错误输出。 */
     public static ExecString exec_s (final File cwd, final Charset cs, final String... cmd)
     throws IOException, InterruptedException {
-        var exec = exec_b (cwd, cmd);
+        ExecBytes exec = exec_b (cwd, cmd);
         return new ExecString (exec.exitcode, new String (exec.output, cs));
     }
 
     /** 在当前路径运行外部程序，等结束，取进程返回码和输出字符串，含错误输出。 */
     public static ExecString exec_s (final Charset cs, final String... cmd)
     throws IOException, InterruptedException {
-        var exec = exec_b (cmd);
+        ExecBytes exec = exec_b (cmd);
         return new ExecString (exec.exitcode, new String (exec.output, cs));
     }
 
     /** 在指定路径运行外部程序，等结束，取进程返回码和输出字符串（操作系统当前字符集），含错误输出。 */
     public static ExecString exec_s (final File cwd, final String... cmd)
     throws IOException, InterruptedException {
-        var cs = Charset.forName (System.getProperty ("native.encoding"));
+        Charset cs = Charset.forName (System.getProperty ("native.encoding"));
         return exec_s (cwd, cs, cmd);
     }
 
     /** 在当前路径运行外部程序，等结束，取进程返回码和输出字符串（操作系统当前字符集），含错误输出。 */
     public static ExecString exec_s (final String... cmd)
     throws IOException, InterruptedException {
-        var cs = Charset.forName (System.getProperty ("native.encoding"));
+        Charset cs = Charset.forName (System.getProperty ("native.encoding"));
         return exec_s (cs, cmd);
     }
 
@@ -519,7 +807,7 @@ public class ArgUtil {
     public static String existsWhichFile (final String[] files) {
         if (files == null) return null;
         for (String file1 : files) {
-            if (Files.exists (Path.of (file1))) {
+            if (Files.exists (Paths.get (file1))) {
                 return file1;
             }
         }

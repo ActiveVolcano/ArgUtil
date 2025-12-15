@@ -1,5 +1,6 @@
 package cn.nhcqc.arg;
 
+import java.util.*;
 import org.junit.jupiter.api.*;
 
 public class ArgUtilTest {
@@ -43,10 +44,10 @@ public class ArgUtilTest {
     //------------------------------------------------------------------------
     @Test
     public void testParseQueryString () {
-        var plain = ArgUtil.parseQueryString ("mode=PLAIN&dek=");
+        Map<String, String> plain = ArgUtil.parseQueryString ("mode=PLAIN&dek=");
         Assertions.assertTrue (plain.get ("mode").equals ("PLAIN"));
 
-        var xor   = ArgUtil.parseQueryString ("mode=XOR&dek=123");
+        Map<String, String> xor   = ArgUtil.parseQueryString ("mode=XOR&dek=123");
         Assertions.assertTrue (xor.get ("mode").equals ("XOR"));
         Assertions.assertTrue (xor.get ("dek" ).equals ("123"));
     }
