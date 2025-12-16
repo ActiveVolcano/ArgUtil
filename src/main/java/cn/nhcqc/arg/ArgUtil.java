@@ -445,31 +445,88 @@ public class ArgUtil {
     }
 
     //------------------------------------------------------------------------
-    private static final HexFormat BASE16 = HexFormat.of ().withUpperCase ();
+    // private static final HexFormat BASE16 = HexFormat.of ().withUpperCase ();
+    private static final Object BASE16 = initBASE16 ();
+
+    private static Object initBASE16 () {
+        Object aBASE16 = null;
+        try {
+            Class<?> classHexFormat = Class.forName ("java.util.HexFormat");
+            Object aHexFormat = classHexFormat.getMethod ("of").invoke(null);
+            aBASE16 = classHexFormat.getMethod ("withUpperCase").invoke (aHexFormat);
+        } catch (Throwable t) {
+            aBASE16 = null;
+        }
+        return aBASE16;
+    }
 
     /** 字节数组转成 Base16 (Hex) 字符串 */
     public static String base16 (final byte[] b) {
-        return b == null ? "null" : BASE16.formatHex (b);
+        if (b == null) return "null";
+        if (BASE16 == null) return "当前 Java 版本不支持 HexFormat";
+        // return BASE16.formatHex (b);
+
+        try {
+            return (String) BASE16
+                .getClass()
+                .getMethod ("formatHex", byte[].class)
+                .invoke (BASE16, b);
+        } catch (Exception e) {
+            return e.getMessage();
+        }
     }
     /** 字节数组转成 Base16 (Hex) 字符串 */
     public static String base16 (final byte[] b, final int len) {
+        if (b == null) return "null";
         if (len <= 0) return "";
-        return b == null ? "null" : BASE16.formatHex (b, 0, Math.min (len, b.length));
+        if (BASE16 == null) return "当前 Java 版本不支持 HexFormat";
+        // return BASE16.formatHex (b, 0, Math.min (len, b.length));
+
+        try {
+            return (String) BASE16
+                .getClass()
+                .getMethod ("formatHex", byte[].class, int.class, int.class)
+                .invoke (BASE16, b, 0, Math.min (len, b.length));
+        } catch (Exception e) {
+            return e.getMessage();
+        }
     }
 
     /** Base16 (Hex) 字符串转成字节数组 */
     public static byte[] unbase16 (final String s) {
-        return s == null || s.isEmpty () ? new byte[0] : BASE16.parseHex (s);
+        if (s == null || s.isEmpty ()) return new byte[0];
+        if (BASE16 == null) return "当前 Java 版本不支持 HexFormat".getBytes();
+        // return BASE16.parseHex (s);
+
+        try {
+            return (byte[]) BASE16
+                .getClass()
+                .getMethod ("parseHex", CharSequence.class)
+                .invoke (BASE16, s);
+        } catch (Exception e) {
+            return e.getMessage().getBytes();
+        }
     }
 
     /** 输出字节数组长度及前面部分字节作为预览，如入参为空指针则返回 "(null)". */
     public static String head16 (final byte[] b, final int len) {
         if (b == null) return "(null)";
         if (len <= 0) return "";
+        if (BASE16 == null) return "当前 Java 版本不支持 HexFormat";
 
         StringBuilder s = new StringBuilder();
         s.append ("(").append (b.length).append (") ");
-        BASE16.formatHex(s, b, 0, Math.min (len, b.length));
+
+        // BASE16.formatHex (s, b, 0, Math.min (len, b.length));
+        try {
+            BASE16
+                .getClass()
+                .getMethod ("formatHex", Appendable.class, byte[].class, int.class, int.class)
+                .invoke (BASE16, s, b, 0, Math.min (len, b.length));
+        } catch (Exception e) {
+            return e.getMessage();
+        }
+
         return s.toString();
     }
 
